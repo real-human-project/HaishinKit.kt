@@ -113,7 +113,7 @@ class MediaRecorder(
     override fun append(buffer: MediaBuffer) {
         if (!isRecording) return
         buffer.payload?.let {
-            audioCodec.append(it)
+            audioCodec.append(it, buffer.timestamp)
         }
     }
 

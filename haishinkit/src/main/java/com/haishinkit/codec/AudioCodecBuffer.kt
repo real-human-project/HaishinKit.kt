@@ -1,52 +1,102 @@
 package com.haishinkit.codec
 
-import androidx.core.util.Pools
 import java.nio.ByteBuffer
-import java.util.concurrent.LinkedBlockingDeque
 
 internal class AudioCodecBuffer {
     var sampleRate: Int = 44100
-    var presentationTimestamp: Long = DEFAULT_PRESENTATION_TIMESTAMP
-        private set
-    private var pool = Pools.SynchronizedPool<ByteBuffer>(CAPACITY * 2)
-    private var buffers = LinkedBlockingDeque<ByteBuffer>(CAPACITY)
+    var channelCount: Int = 1
+    private val lock = Object()
+    private val buffers = Array(CAPACITY) { Buffer() }
+    private var head = 0
+    private var size = 0
+    private var isRunning = false
+    private var generation = 0L
 
-    fun append(byteBuffer: ByteBuffer) {
-        val buffer = pool.acquire() ?: ByteBuffer.allocateDirect(byteBuffer.capacity())
-        buffer.rewind()
-        buffer.put(byteBuffer)
-        if (buffers.size < CAPACITY) {
-            buffers.add(buffer)
-        } else {
-            buffers.pop()
-            buffers.put(buffer)
+    class RenderResult {
+        var size = 0
+        var presentationTimeUs = 0L
+    }
+
+    private class Buffer {
+        var payload: ByteBuffer? = null
+        var presentationTimeUs = 0L
+    }
+
+    fun start() {
+        synchronized(lock) {
+            isRunning = true
         }
     }
 
-    fun render(byteBuffer: ByteBuffer): Int {
-        val buffer = buffers.take()
-        buffer.rewind()
-        val start = byteBuffer.position()
-        byteBuffer.put(buffer)
-        pool.release(buffer)
-        val result = byteBuffer.position() - start
-        if (presentationTimestamp == DEFAULT_PRESENTATION_TIMESTAMP) {
-            presentationTimestamp = System.nanoTime() / 1000
-        } else {
-            presentationTimestamp += timestamp(result / 2)
+    fun append(
+        byteBuffer: ByteBuffer,
+        presentationTimeUs: Long,
+    ) {
+        synchronized(lock) {
+            if (!isRunning || !byteBuffer.hasRemaining()) return
+            val entry = buffers[(head + size) % CAPACITY]
+            val payload =
+                entry.payload?.takeIf { it.capacity() >= byteBuffer.remaining() }
+                    ?: ByteBuffer.allocateDirect(byteBuffer.remaining()).also { entry.payload = it }
+            payload.clear()
+            val position = byteBuffer.position()
+            try {
+                payload.put(byteBuffer)
+            } finally {
+                byteBuffer.position(position)
+            }
+            payload.flip()
+            entry.presentationTimeUs = presentationTimeUs
+            if (size == CAPACITY) {
+                head = (head + 1) % CAPACITY
+            } else {
+                size++
+            }
+            lock.notifyAll()
         }
-        return result
+    }
+
+    fun render(
+        byteBuffer: ByteBuffer,
+        result: RenderResult,
+    ): Boolean {
+        synchronized(lock) {
+            val generation = this.generation
+            while (isRunning && generation == this.generation && size == 0) {
+                lock.wait()
+            }
+            if (!isRunning || generation != this.generation) return false
+            val entry = buffers[head]
+            val payload = checkNotNull(entry.payload)
+            val bytesPerFrame = channelCount * 2
+            val count = minOf(byteBuffer.remaining(), payload.remaining()) / bytesPerFrame * bytesPerFrame
+            require(count > 0) { "The input buffer must hold a complete PCM frame." }
+            result.presentationTimeUs =
+                entry.presentationTimeUs + payload.position().toLong() / bytesPerFrame * 1_000_000 / sampleRate
+            result.size = count
+            val limit = payload.limit()
+            payload.limit(payload.position() + count)
+            byteBuffer.put(payload)
+            payload.limit(limit)
+            if (!payload.hasRemaining()) {
+                head = (head + 1) % CAPACITY
+                size--
+            }
+            return true
+        }
     }
 
     fun clear() {
-        buffers.clear()
-        presentationTimestamp = DEFAULT_PRESENTATION_TIMESTAMP
+        synchronized(lock) {
+            isRunning = false
+            generation++
+            head = 0
+            size = 0
+            lock.notifyAll()
+        }
     }
-
-    private fun timestamp(sampleCount: Int): Long = ((sampleCount.toFloat() / sampleRate.toFloat())).toLong()
 
     companion object {
         const val CAPACITY = 4
-        const val DEFAULT_PRESENTATION_TIMESTAMP = 0L
     }
 }

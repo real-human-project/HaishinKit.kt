@@ -139,7 +139,7 @@ abstract class Stream(
         when (buffer.type) {
             MediaType.AUDIO -> {
                 buffer.payload?.let {
-                    audioCodec.append(it)
+                    audioCodec.append(it, buffer.timestamp)
                 }
             }
 
