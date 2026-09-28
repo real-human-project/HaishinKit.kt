@@ -77,7 +77,7 @@ internal class MediaRecorderMuxer(
         var trackIndex = -1
         if (mime.startsWith("audio")) {
             trackIndex = audioTrackIndex
-            if (info.presentationTimeUs == 0L) {
+            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                 return true
             }
         }

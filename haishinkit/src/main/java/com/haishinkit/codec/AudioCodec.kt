@@ -49,15 +49,27 @@ class AudioCodec : Codec() {
             buffer.sampleRate = value
         }
     var channelCount = DEFAULT_CHANNEL_COUNT
+        set(value) {
+            field = value
+            buffer.channelCount = value
+        }
     var bitRate = DEFAULT_BIT_RATE
     var aacProfile = DEFAULT_AAC_PROFILE
     override var inputMimeType = MediaFormat.MIMETYPE_AUDIO_RAW
     override var outputMimeType = MediaFormat.MIMETYPE_AUDIO_AAC
-    private var buffer = AudioCodecBuffer()
+    private val buffer = AudioCodecBuffer()
+    private val renderResult = AudioCodecBuffer.RenderResult()
 
-    fun append(byteBuffer: ByteBuffer) {
+    /**
+     * Copies the valid PCM16 range, timed at its first frame in monotonic microseconds.
+     * The input position and limit are preserved. Queue eviction does not rebase later timestamps.
+     */
+    fun append(
+        byteBuffer: ByteBuffer,
+        presentationTimeUs: Long,
+    ) {
         if (!isRunning.get()) return
-        buffer.append(byteBuffer)
+        buffer.append(byteBuffer, presentationTimeUs)
     }
 
     override fun onInputBufferAvailable(
@@ -67,12 +79,12 @@ class AudioCodec : Codec() {
         if (mode == MODE_ENCODE) {
             try {
                 val inputBuffer = codec.getInputBuffer(index) ?: return
-                val result = buffer.render(inputBuffer)
+                if (!buffer.render(inputBuffer, renderResult)) return
                 codec.queueInputBuffer(
                     index,
                     0,
-                    result,
-                    buffer.presentationTimestamp,
+                    renderResult.size,
+                    renderResult.presentationTimeUs,
                     0,
                 )
             } catch (e: IllegalStateException) {
@@ -92,6 +104,11 @@ class AudioCodec : Codec() {
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, DEFAULT_KEY_MAX_INPUT_SIZE)
             }
         }
+
+    override fun configure(codec: MediaCodec) {
+        buffer.start()
+        super.configure(codec)
+    }
 
     override fun dispose() {
         buffer.clear()
