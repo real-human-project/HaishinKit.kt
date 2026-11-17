@@ -239,7 +239,7 @@ internal class RtmpMuxer(
                 if (videoTimestamp == 0L) {
                     videoTimestamp = info.presentationTimeUs
                 }
-                val timestamp = (info.presentationTimeUs - videoTimestamp).toInt()
+                val timestamp = mediaTimestampDelta(mime, info.presentationTimeUs, videoTimestamp)
                 val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                 val video = stream.messageFactory.createRtmpVideoMessage()
                 stream.doOutput(
@@ -251,13 +251,13 @@ internal class RtmpMuxer(
                         codec = FLV_VIDEO_CODEC_AVC
                         data = buffer
                         chunkStreamID = RtmpChunk.VIDEO
-                        this.timestamp = timestamp / 1000
+                        this.timestamp = timestamp
                         streamID = stream.id
                         compositeTime = 0
                     },
                 )
                 stream.frameCount.incrementAndGet()
-                videoTimestamp += video.timestamp * 1000
+                videoTimestamp += video.timestamp * 1000L
                 return true
             }
 
@@ -273,7 +273,7 @@ internal class RtmpMuxer(
                 if (videoTimestamp == 0L) {
                     videoTimestamp = info.presentationTimeUs
                 }
-                val timestamp = (info.presentationTimeUs - videoTimestamp).toInt()
+                val timestamp = mediaTimestampDelta(mime, info.presentationTimeUs, videoTimestamp)
                 val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                 val video = stream.messageFactory.createRtmpVideoMessage()
                 stream.doOutput(
@@ -291,12 +291,12 @@ internal class RtmpMuxer(
                         data = buffer
                         chunkStreamID = RtmpChunk.VIDEO
                         streamID = stream.id
-                        this.timestamp = timestamp / 1000
+                        this.timestamp = timestamp
                         compositeTime = 0
                     },
                 )
                 stream.frameCount.incrementAndGet()
-                videoTimestamp += video.timestamp * 1000
+                videoTimestamp += video.timestamp * 1000L
                 return true
             }
 
@@ -319,7 +319,7 @@ internal class RtmpMuxer(
                 if (audioTimestamp == 0L) {
                     audioTimestamp = info.presentationTimeUs
                 }
-                val timestamp = (info.presentationTimeUs - audioTimestamp).toInt()
+                val timestamp = mediaTimestampDelta(mime, info.presentationTimeUs, audioTimestamp)
                 val audio = stream.messageFactory.createRtmpAudioMessage()
                 stream.doOutput(
                     RtmpChunk.ONE,
@@ -328,15 +328,29 @@ internal class RtmpMuxer(
                         aacPacketType = FLV_AAC_PACKET_TYPE_RAW
                         data = buffer
                         chunkStreamID = RtmpChunk.AUDIO
-                        this.timestamp = timestamp / 1000
+                        this.timestamp = timestamp
                         streamID = stream.id
                     },
                 )
-                audioTimestamp += audio.timestamp * 1000
+                audioTimestamp += audio.timestamp * 1000L
                 return true
             }
         }
         return true
+    }
+
+    private fun mediaTimestampDelta(
+        mime: String,
+        presentationTimeUs: Long,
+        base: Long,
+    ): Int {
+        val delta = (presentationTimeUs - base) / 1000
+        // 0xFFFFFF signals an extended timestamp, which RtmpChunk.encode does not write.
+        val timestamp = delta.coerceIn(0L, 0xFFFFFEL)
+        if (timestamp != delta) {
+            Log.d(TAG, "Clamped media timestamp: type=$mime presentationTimeUs=$presentationTimeUs base=$base rawDelta=$delta")
+        }
+        return timestamp.toInt()
     }
 
     override fun <T> onBufferFull(controller: BufferController<T>) {
