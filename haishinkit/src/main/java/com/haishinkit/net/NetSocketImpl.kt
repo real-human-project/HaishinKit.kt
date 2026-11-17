@@ -140,7 +140,6 @@ class NetSocketImpl :
                 val remaining = buffer.remaining().toLong()
                 outputStream.write(buffer.array(), 0, buffer.remaining())
                 outputStream.flush()
-                outputQueue.remove(buffer)
                 totalBytesOut.addAndGet(remaining)
                 queueBytesOut.addAndGet(remaining * -1)
                 synchronized(outputBufferPool) {
